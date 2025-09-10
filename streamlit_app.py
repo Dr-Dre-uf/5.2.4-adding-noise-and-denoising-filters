@@ -1,151 +1,90 @@
 import streamlit as st
-import pandas as pd
-import math
-from pathlib import Path
+import numpy as np
+import cv2
+from PIL import Image
+from skimage.util import random_noise
+from skimage import img_as_ubyte
 
-# Set the title and favicon that appear in the Browser's tab bar.
-st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
-)
+st.set_page_config(page_title="Salt & Pepper Noise and Denoising", layout="wide")
 
-# -----------------------------------------------------------------------------
-# Declare some useful functions.
+st.title("Adding Salt-and-Pepper Noise and Applying Denoising Filters")
 
-@st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
+# Warning
+st.warning("⚠️ Do not upload sensitive or personal data. Images are processed locally in this demo app.")
 
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
-    """
+# Sidebar: image selection
+st.sidebar.header("Image Selection")
+use_uploaded = st.sidebar.checkbox("Upload your own image")
 
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
-
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
-
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
+uploaded_img = None
+if use_uploaded:
+    uploaded_img = st.sidebar.file_uploader(
+        "Upload an Image",
+        type=["jpg", "jpeg", "png"]
+    )
+else:
+    image_choice = st.sidebar.selectbox(
+        "Select Example Image",
+        ["Fluorescence (IFCells)", "Brightfield (BloodSmear)"],
+        help="Choose a sample image."
     )
 
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
-
-    return gdp_df
-
-gdp_df = get_gdp_data()
-
-# -----------------------------------------------------------------------------
-# Draw the actual page
-
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
-
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
-
-# Add some spacing
-''
-''
-
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
-
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
-
-countries = gdp_df['Country Code'].unique()
-
-if not len(countries):
-    st.warning("Select at least one country")
-
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
-
-''
-''
-''
-
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
-]
-
-st.header('GDP over time', divider='gray')
-
-''
-
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
+# Sidebar: noise and filter settings
+st.sidebar.header("Noise Settings")
+noise_amount = st.sidebar.slider(
+    "Noise Amount", 0.0, 0.2, 0.05, step=0.01,
+    help="Controls how much salt-and-pepper noise is added."
 )
 
-''
-''
+st.sidebar.header("Denoising Filter")
+filter_type = st.sidebar.radio(
+    "Choose Filter Type", ["Median", "Gaussian"],
+    help="Select the type of filter used to remove noise."
+)
 
+if filter_type == "Median":
+    filter_strength = st.sidebar.slider(
+        "Kernel Size (odd only)", 3, 11, 3, step=2,
+        help="Size of the kernel for the median filter."
+    )
+else:
+    filter_strength = st.sidebar.slider(
+        "Gaussian Sigma", 0.5, 5.0, 1.0, step=0.5,
+        help="Standard deviation for Gaussian smoothing."
+    )
 
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
+# Default paths
+bf_path = "assets/BloodSmear.png"
+if_path = "assets/IFCells.jpg"
 
-st.header(f'GDP in {to_year}', divider='gray')
+# Load image (color-safe)
+if use_uploaded and uploaded_img is not None:
+    img = np.array(Image.open(uploaded_img).convert("RGB"))
+elif not use_uploaded:
+    if image_choice == "Fluorescence (IFCells)":
+        img = np.array(Image.open(if_path).convert("RGB"))
+    else:
+        img = np.array(Image.open(bf_path).convert("RGB"))
+else:
+    img = None
 
-''
+# Process
+if img is not None:
+    # Add salt & pepper noise (skimage gives float [0,1])
+    noisy_img = random_noise(img, mode="s&p", amount=noise_amount)
+    noisy_img_u8 = img_as_ubyte(noisy_img)
 
-cols = st.columns(4)
+    # Apply selected filter
+    if filter_type == "Median":
+        denoised_img = cv2.medianBlur(noisy_img_u8, filter_strength)
+    else:  # Gaussian
+        denoised_img = cv2.GaussianBlur(noisy_img_u8, (5, 5), filter_strength)
 
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
-
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
-        else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
-
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
-        )
+    # Display results
+    st.subheader("Noise Simulation and Denoising")
+    col1, col2, col3 = st.columns(3)
+    col1.image(img, caption="Original", use_container_width=True)
+    col2.image(noisy_img, caption="With Salt & Pepper Noise", use_container_width=True)
+    col3.image(denoised_img, caption=f"Denoised ({filter_type})", use_container_width=True)
+else:
+    st.info("Please upload an image or select one from the examples to begin.")
